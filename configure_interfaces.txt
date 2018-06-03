@@ -1,0 +1,51 @@
+Assuming:
+
+self.nic_real = wlan1
+self.nic_rogue_ap = wlan0
+self.nic_rogue_mon = wlan0mon
+
+#1 Remove unused virtual interfaces
+
+$iw wlan1sta1 del
+$iw wlan0mon del
+
+#2. Configure monitor mode on interfaces
+
+#2.1. The nic_real is set as monitor mode
+$ifconfig wlan1 down
+$iw wlan1 set type monitor
+
+#2.2. It's created a new virtual monitor interface nic_rogue_ap + "mon" on interface nic_rogue_ap
+'''
+If nic_rogue_mon is not set, so:
+
+nic_rogue_ap = wlan0
+nic_rogue_mon = wlan0mon
+'''
+if self.nic_rogue_mon is None
+    self.nic_rogue_mon = self.nic_rogue_ap + "mon"
+
+$iw wlan0 interface add wlan0mon type monitor
+
+$ifconfig wlan0mon up
+time.sleep(0.2)
+$ifconfig wlan0mon down
+$iw wlan0mon set type monitor
+$ifconfig wlan0mon up
+
+#3. Configure interface on real channel to ACK frames
+$iw wlan1 interface add wlan1sta1 type managed
+call_macchanger(wlan1sta1, self.clientmac)
+
+#4. Put interfaces up
+$ifconfig wlan1 up
+$ifconfig wlan0mon up
+
+
+
+
+
+
+
+
+
