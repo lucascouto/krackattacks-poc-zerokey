@@ -1,9 +1,22 @@
+'''
+This module is responsible for creating sockets on interfaces, and for manipulating packets to et informations from them. 4 constants are responsible for return the type code for a specific IEEE 802.11 element:
+  IEEE_TLV_TYPE_SSID
+  IEEE_TLV_TYPE_CHANNEL
+  IEEE_TLV_TYPE_RSN
+  IEEE_TLV_TYPE_CSA
+  IEEE_TLV_TYPE_VENDOR
+
+4 constants are binary numbers that represents the bit flag position for a RadioTap element:
+  IEEE80211_RADIOTAP_RATE = (1 << 2)
+  IEEE80211_RADIOTAP_CHANNEL = (1 << 3)
+  IEEE80211_RADIOTAP_TX_FLAGS = (1 << 15)
+  IEEE80211_RADIOTAP_DATA_RETRIES = (1 << 17)
+'''
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
 from log_messages import *
-import sys, os, socket, struct, time, argparse, heapq, subprocess, atexit, select, textwrap
-from datetime import datetime
+import socket, struct, subprocess
 
 IEEE_TLV_TYPE_SSID    = 0
 IEEE_TLV_TYPE_CHANNEL = 3
@@ -18,6 +31,9 @@ IEEE80211_RADIOTAP_DATA_RETRIES = (1 << 17)
 
 class MitmSocket(L2Socket):
 	'''
+    Module: packet_processing
+    ===
+
     Descripion: open a new scoket on iface interface
 
     Arguments:
@@ -35,6 +51,10 @@ class MitmSocket(L2Socket):
 
 	def set_channel(self, channel):
 		'''
+		Module: packet_processing
+		===
+		Class: MitmSocket
+		---
 		Description: configure a new channel for the interface
 
 		Arguments:
@@ -44,6 +64,11 @@ class MitmSocket(L2Socket):
 
 	def attach_filter(self, bpf):
 		'''
+		Module: packet_processing
+		===
+		Class: MitmSocket
+		---
+
 		Description: creates a packet filter for the interface
 
 		Arguments:
@@ -54,6 +79,11 @@ class MitmSocket(L2Socket):
 
 	def send(self, p):
 		'''
+        Module: packet_processing
+        ===
+        Class: MitmSocket
+        ---
+
 		Description: inject new packet on network
 
 		Arguments:
@@ -67,6 +97,11 @@ class MitmSocket(L2Socket):
 
 	def _strip_fcs(self, p):
 		'''
+		Module: packet_processing
+		===
+		Class: MitmSocket
+		---
+
 		Description: remove the FCS from the packet, if it's present
 
 		Arguments:
@@ -91,6 +126,11 @@ class MitmSocket(L2Socket):
 
 	def recv(self, x=MTU):
 		'''
+		Module: packet_processing
+		===
+		Class: MitmSocket
+		---
+		
 		Description: listen to 802.11 packets
 		
 		Obs.: it has some rules to reject echoed injected packets
@@ -125,6 +165,10 @@ class MitmSocket(L2Socket):
 
 	def close(self):
 		'''
+		Module: packet_processing
+		===
+		Class: MitmSocket
+		---
 		Description: close the socket connection and the pcap file
 		'''
 		if self.pcap: self.pcap.close()
@@ -132,6 +176,8 @@ class MitmSocket(L2Socket):
 
 def call_macchanger(iface, macaddr):
 	'''
+	Module: packet_processing
+	===
 	Description: it calls the macchanger function without 'down' and 'up' operation on the interface
 
 	Arguments:
@@ -146,6 +192,8 @@ def call_macchanger(iface, macaddr):
 
 def set_mac_address(iface, macaddr):
 	'''
+	Module: packet_processing
+	===
 	Description: set the macaddress of iface to macaddr
 
 	Arguments:
@@ -167,6 +215,8 @@ def set_monitor_ack_address(iface, macaddr, sta_suffix=None):
 
 def xorstr(lhs, rhs):
 	'''
+	Module: packet_processing
+	===
 	Description: execute the XOR operation between a choosen plaintext and a ciphertext to obtain a keystream
 
 	Arguments:
@@ -177,6 +227,8 @@ def xorstr(lhs, rhs):
 
 def dot11_get_seqnum(p):
 	'''
+	Module: packet_processing
+	===
 	Description: get the sequence number from the 802.11 MAC header
 
 	Arguments:
@@ -186,6 +238,8 @@ def dot11_get_seqnum(p):
 
 def dot11_get_iv(p):
 	'''
+	Module: packet_processing
+	===
 	Description: obtain the IV value from a TKIP or CCMP packet
 
 	Arguments:
@@ -203,6 +257,8 @@ def dot11_get_iv(p):
 
 def dot11_get_tid(p):
 	'''
+	Module: packet_processing
+	===
 	Descpriton: if it's present, obtain the TID (Traffic ID) number from the QoS
 
 	Arguments:
@@ -214,6 +270,8 @@ def dot11_get_tid(p):
 
 def dot11_is_group(p):
 	'''
+	Module: packet_processing
+	===
 	Description: determine if the packet is a broadcast packet
 
 	Arguments:
@@ -224,6 +282,8 @@ def dot11_is_group(p):
 
 def get_eapol_msgnum(p):
 	'''
+	Module: packet_processing
+	===
 	Description: gets the number of the EAPOL message
 
 	Arguments:
@@ -254,6 +314,8 @@ def get_eapol_msgnum(p):
 
 def get_eapol_replaynum(p):
 	'''
+	Module: packet_processing
+	===
 	Description: get the Replay Counter from the EAPOL packet
 
 	Argument:
@@ -264,6 +326,8 @@ def get_eapol_replaynum(p):
 
 def set_eapol_replaynum(p, value):
 	'''
+	Module: packet_processing
+	===
 	Description: set the Replay Counter of the EAPOL packet to value
 	'''
 	p[EAPOL].load = p[EAPOL].load[:5] + struct.pack(">Q", value) + p[EAPOL].load[13:]
@@ -271,6 +335,8 @@ def set_eapol_replaynum(p, value):
 
 def dot11_to_str(p):
 	'''
+	Module: packet_processing
+	===
 	Description: return the string representation of the packet
 
 	Arguments:
@@ -309,6 +375,8 @@ def dot11_to_str(p):
 
 def construct_csa(channel, count=1):
 	'''
+	Module: packet_processing
+	===
 	Description: constructs the CSA element
 
 	Arguments:
@@ -325,6 +393,8 @@ def construct_csa(channel, count=1):
 
 def append_csa(p, channel, count=1):
 	'''
+	Module: packet_processing
+	===
 	Descprition: appends the CSA element to the packet p
 
 	Arguments:
@@ -346,7 +416,9 @@ def append_csa(p, channel, count=1):
 
 def get_tlv_value(p, type):
 	'''
-	Description: gets the value from an element of `type`
+	Module: packet_processing
+	===
+	Description: gets the value from an element of type == `type`
 
 	Arguments:
 	  p: 802.11 packet
